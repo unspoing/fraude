@@ -42,6 +42,25 @@ class QuestionState:
 
 app = FastAPI(title="fraude")
 
+
+@app.get("/")
+async def root():
+    """This server is the API only. The web UI is served by Vite (usually port 5173)."""
+    return {
+        "service": "fraude-api",
+        "hint": "Open the app via the Vite dev server, not this port.",
+        "ui_dev": "http://127.0.0.1:5173",
+        "docs": "/docs",
+        "health": "/api/health",
+    }
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    from fastapi.responses import Response
+
+    return Response(status_code=204)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
