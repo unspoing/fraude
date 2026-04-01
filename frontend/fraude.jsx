@@ -1,85 +1,272 @@
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import "./fraude.css";
 
+function getOrCreateClientId() {
+    let id = sessionStorage.getItem("fraude_client_id");
+    if (!id) {
+        id = crypto.randomUUID();
+        sessionStorage.setItem("fraude_client_id", id);
+    }
+    return id;
+}
+
 export default function App() {
+    const clientId = useMemo(() => getOrCreateClientId(), []);
+
     const [question, setQuestion] = useState("");
-    const [messages, setMessages] = useState([]);
-    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [wsState, setWsState] = useState("connecting");
+    const [error, setError] = useState(null);
+
+    /** @type {Record<string, { text: string, status: 'open'|'summarized', summary?: string }>} */
+    const [myQuestions, setMyQuestions] = useState({});
+    /** @type {Record<string, { text: string, askerId: string }>} */
+    const [toAnswer, setToAnswer] = useState({});
+    const [answerDrafts, setAnswerDrafts] = useState({});
+
+    const handleWsMessage = useCallback((ev) => {
+        let data;
+        try {
+            data = JSON.parse(ev.data);
+        } catch {
+            return;
+        }
+        if (data.type === "new_question") {
+            if (data.asker_client_id === clientId) {
+                setMyQuestions((prev) => ({
+                    ...prev,
+                    [data.question_id]: { text: data.question_text, status: "open" },
+                }));
+            } else {
+                setToAnswer((prev) => ({
+                    ...prev,
+                    [data.question_id]: {
+                        text: data.question_text,
+                        askerId: data.asker_client_id,
+                    },
+                }));
+            }
+        }
+        if (data.type === "summary_ready") {
+            setMyQuestions((prev) => {
+                const cur = prev[data.question_id];
+                if (!cur) return prev;
+                return {
+                    ...prev,
+                    [data.question_id]: {
+                        ...cur,
+                        status: "summarized",
+                        summary: data.summary,
+                    },
+                };
+            });
+        }
+    }, [clientId]);
+
+    useEffect(() => {
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const url = `${protocol}//${window.location.host}/ws/${encodeURIComponent(clientId)}`;
+        const ws = new WebSocket(url);
+
+        ws.onopen = () => {
+            setWsState("open");
+            setError(null);
+        };
+        ws.onclose = () => setWsState("closed");
+        ws.onerror = () => setError("WebSocket error — is the API running on :8000?");
+        ws.onmessage = handleWsMessage;
+
+        const ping = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send("ping");
+            }
+        }, 25000);
+
+        return () => {
+            clearInterval(ping);
+            ws.close();
+        };
+    }, [clientId, handleWsMessage]);
 
     const handleAsk = async () => {
-        // return if no question 
-        if (!question.trim() || isSubmitting) return;
-
-        // store current question and id
-        const currentQuestion = question;
-        const messageId = crypto.randomUUID();
-
-        // add question to list
-        setMessages((m) => [
-            ...m,
-            { id: messageId, question: currentQuestion, answer: null }
-        ]);
-
-        setQuestion("");
-        setIsSubmitting(true);
-
-        // wait 10 secs then answer = question
-        await new Promise((resolve) => setTimeout(resolve, 10000));
-        setMessages((msgs) =>
-            msgs.map((msg) =>
-                msg.id === messageId
-                    ? { ...msg, answer: currentQuestion }
-                    : msg
-            )
-        );
-        setIsSubmitting(false);
+        const t = question.trim();
+        if (!t) return;
+        setError(null);
+        try {
+            const res = await fetch("/api/questions", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ client_id: clientId, text: t }),
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || res.statusText);
+            }
+            const data = await res.json();
+            setMyQuestions((prev) => ({
+                ...prev,
+                [data.question_id]: { text: t, status: "open" },
+            }));
+            setQuestion("");
+        } catch (e) {
+            setError(e.message || String(e));
+        }
     };
+
+    const submitAnswer = async (qid) => {
+        const text = (answerDrafts[qid] || "").trim();
+        if (!text) return;
+        setError(null);
+        try {
+            const res = await fetch(`/api/questions/${qid}/answers`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ client_id: clientId, text }),
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || res.statusText);
+            }
+            setToAnswer((prev) => {
+                const next = { ...prev };
+                delete next[qid];
+                return next;
+            });
+            setAnswerDrafts((prev) => {
+                const next = { ...prev };
+                delete next[qid];
+                return next;
+            });
+        } catch (e) {
+            setError(e.message || String(e));
+        }
+    };
+
+    const finalize = async (qid) => {
+        setError(null);
+        try {
+            const res = await fetch(`/api/questions/${qid}/finalize`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ client_id: clientId }),
+            });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                throw new Error(
+                    typeof body.detail === "string"
+                        ? body.detail
+                        : JSON.stringify(body.detail || body)
+                );
+            }
+            setMyQuestions((prev) => ({
+                ...prev,
+                [qid]: {
+                    ...prev[qid],
+                    status: "summarized",
+                    summary: body.summary,
+                },
+            }));
+        } catch (e) {
+            setError(e.message || String(e));
+        }
+    };
+
+    const myList = Object.entries(myQuestions).sort(([a], [b]) => a.localeCompare(b));
 
     return (
         <div className="fraude-root">
-            <header className="fraude-topbar">fraude</header>
+            <header className="fraude-topbar">
+                <span>fraude</span>
+                <span className={`fraude-ws fraude-ws-${wsState}`}>
+                    {wsState === "open"
+                        ? "live"
+                        : wsState === "connecting"
+                          ? "connecting…"
+                          : "offline"}
+                </span>
+            </header>
+
+            {error ? <div className="fraude-banner">{error}</div> : null}
 
             <div className="fraude-main">
                 <aside className="fraude-left">
-                    <label className="fraude-label">question? o-o</label>
-
+                    <p className="fraude-hint">
+                        You are <code className="fraude-code">{clientId.slice(0, 8)}…</code>
+                    </p>
+                    <label className="fraude-label">your question</label>
                     <textarea
                         className="fraude-textarea"
                         value={question}
                         onChange={(e) => setQuestion(e.target.value)}
-                        placeholder="what da question"
-                        disabled={isSubmitting}
+                        placeholder="ask something — everyone online gets pinged"
+                        rows={6}
                     />
-
                     <button
+                        type="button"
                         className="fraude-button"
                         onClick={handleAsk}
-                        disabled={isSubmitting || !question.trim()}
+                        disabled={!question.trim()}
                     >
-                        {isSubmitting ? "pondering..." : "ponder"}
+                        ask the crowd
                     </button>
                 </aside>
 
                 <div className="fraude-divider" />
 
                 <section className="fraude-right">
-                    {messages.length === 0 ? (
-                        <div className="fraude-card">
-                            <span className="fraude-waiting">cue and ayy</span>
-                        </div>
+                    <h2 className="fraude-section-title">your threads</h2>
+                    {myList.length === 0 ? (
+                        <div className="fraude-card fraude-muted">nothing here yet</div>
                     ) : (
-                        messages.map((msg) => (
-                            <div key={msg.id} className="fraude-card">
-                                <div className="fraude-card-question">q: {msg.question}</div>
-                                <div className="fraude-card-answer">
-                                    {msg.answer === null ? (
-                                        <span className="fraude-waiting">thinking real hard...</span>
-                                    ) : msg.answer === "error :(" ? (
-                                        <span className="fraude-error">u ass(</span>
-                                    ) : (
-                                        <span>a: {msg.answer}</span>
-                                    )}
-                                </div>
+                        myList.map(([qid, q]) => (
+                            <div key={qid} className="fraude-card">
+                                <div className="fraude-card-question">q: {q.text}</div>
+                                {q.status === "open" ? (
+                                    <div className="fraude-actions">
+                                        <button
+                                            type="button"
+                                            className="fraude-button fraude-button-secondary"
+                                            onClick={() => finalize(qid)}
+                                        >
+                                            get summary (Gemini)
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="fraude-card-answer">
+                                        <span className="fraude-label">summary</span>
+                                        <p className="fraude-summary">{q.summary}</p>
+                                    </div>
+                                )}
+                            </div>
+                        ))
+                    )}
+
+                    <h2 className="fraude-section-title">answer others</h2>
+                    {Object.keys(toAnswer).length === 0 ? (
+                        <div className="fraude-card fraude-muted">no open questions</div>
+                    ) : (
+                        Object.entries(toAnswer).map(([qid, item]) => (
+                            <div key={qid} className="fraude-card fraude-card-incoming">
+                                <div className="fraude-card-question">q: {item.text}</div>
+                                <textarea
+                                    className="fraude-textarea fraude-textarea-sm"
+                                    placeholder="your raw take"
+                                    value={answerDrafts[qid] || ""}
+                                    onChange={(e) =>
+                                        setAnswerDrafts((d) => ({
+                                            ...d,
+                                            [qid]: e.target.value,
+                                        }))
+                                    }
+                                    rows={4}
+                                />
+                                <button
+                                    type="button"
+                                    className="fraude-button"
+                                    onClick={() => submitAnswer(qid)}
+                                    disabled={!(answerDrafts[qid] || "").trim()}
+                                >
+                                    send answer
+                                </button>
                             </div>
                         ))
                     )}
