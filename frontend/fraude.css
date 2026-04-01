@@ -1,0 +1,72 @@
+.fraude-root {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    font-family: system-ui, sans-serif;
+}
+
+.fraude-topbar {
+    height: 40px;
+    display: flex;
+    align-items: center;
+    padding-left: 16px;
+    font-weight: bold;
+    border-bottom: 1px solid #ccc;
+}
+
+.fraude-main {
+    flex: 1;
+    display: flex;
+}
+
+.fraude-left {
+    width: 300px;
+    display: flex;
+    flex-direction: column;
+    padding: 18px;
+    gap: 10px;
+    border-right: 1px solid #eee;
+}
+
+.fraude-label {
+    font-size: 14px;
+    font-weight: 500;
+    color: #666;
+}
+
+.fraude-textarea {
+    flex: 1;
+    resize: none;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-family: inherit;
+}
+
+.fraude-button {
+    padding: 10px 16px;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.fraude-divider {
+    width: 1px;
+    background: #ccc;
+}
+
+.fraude-right {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.fraude-card {
+    padding: 12px;
+    border: 1px solid #ddd;
+    border-radius: 10px;
+}
