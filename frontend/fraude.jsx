@@ -65,19 +65,19 @@ export default function App() {
                 <section className="fraude-right">
                     {messages.length === 0 ? (
                         <div className="fraude-card">
-                            <span className="fraude-waiting">No questions yet. Ask something!</span>
+                            <span className="fraude-waiting">cue and ayy</span>
                         </div>
                     ) : (
                         messages.map((msg) => (
                             <div key={msg.id} className="fraude-card">
-                                <div className="fraude-card-question">Q: {msg.question}</div>
+                                <div className="fraude-card-question">q: {msg.question}</div>
                                 <div className="fraude-card-answer">
                                     {msg.answer === null ? (
-                                        <span className="fraude-waiting">waiting...</span>
+                                        <span className="fraude-waiting">thinking real hard...</span>
                                     ) : msg.answer === "error :(" ? (
-                                        <span className="fraude-error">error :(</span>
+                                        <span className="fraude-error">u ass(</span>
                                     ) : (
-                                        <span>A: {msg.answer}</span>
+                                        <span>a: {msg.answer}</span>
                                     )}
                                 </div>
                             </div>
