@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 
 def _gemini_client():
