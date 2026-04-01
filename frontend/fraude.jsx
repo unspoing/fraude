@@ -1,3 +1,13 @@
+/**
+ * Fraude client UI
+ *
+ * Flow:
+ * - Each browser tab gets a stable `clientId` (sessionStorage) so the server can route WebSocket events.
+ * - POST /api/questions creates a question; the server broadcasts `new_question` to every connected client.
+ * - Other users answer via POST /api/questions/:id/answers; the asker clicks "finalize" → POST .../finalize
+ *   and the server runs Gemini, then pushes `summary_ready` to the asker's WebSocket only.
+ * - Dev: Vite proxies /api and /ws to FastAPI on :8000 (see vite.config.js).
+ */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import "./fraude.css";
 
@@ -24,6 +34,7 @@ function newClientId() {
     return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
+/** Persists one id per tab so refreshes keep the same identity; new tab → new id. */
 function getOrCreateClientId() {
     let id = sessionStorage.getItem("fraude_client_id");
     if (!id) {
@@ -40,12 +51,19 @@ export default function App() {
     const [wsState, setWsState] = useState("connecting");
     const [error, setError] = useState(null);
 
-    /** @type {Record<string, { text: string, status: 'open'|'summarized', summary?: string }>} */
+    /**
+     * Questions this tab asked; `new_question` events keep state consistent (e.g. multiple tabs).
+     * @type {Record<string, { text: string, status: 'open'|'summarized', summary?: string }>}
+     */
     const [myQuestions, setMyQuestions] = useState({});
-    /** @type {Record<string, { text: string, askerId: string }>} */
+    /**
+     * Other users’ questions still waiting for our answer.
+     * @type {Record<string, { text: string, askerId: string }>}
+     */
     const [toAnswer, setToAnswer] = useState({});
     const [answerDrafts, setAnswerDrafts] = useState({});
 
+    // Server → client: JSON events over the WebSocket (see backend _broadcast / _send_to_client).
     const handleWsMessage = useCallback((ev) => {
         let data;
         try {
@@ -54,12 +72,14 @@ export default function App() {
             return;
         }
         if (data.type === "new_question") {
+            // Same tab may have already added the question from the POST response; this still keeps state in sync.
             if (data.asker_client_id === clientId) {
                 setMyQuestions((prev) => ({
                     ...prev,
                     [data.question_id]: { text: data.question_text, status: "open" },
                 }));
             } else {
+                // Someone else asked — show it under "answer others".
                 setToAnswer((prev) => ({
                     ...prev,
                     [data.question_id]: {
@@ -70,6 +90,7 @@ export default function App() {
             }
         }
         if (data.type === "summary_ready") {
+            // Only the asker receives this (server sends to asker’s client_id).
             setMyQuestions((prev) => {
                 const cur = prev[data.question_id];
                 if (!cur) return prev;
@@ -85,6 +106,7 @@ export default function App() {
         }
     }, [clientId]);
 
+    // Long-lived connection: same host as the Vite page so the proxy forwards to FastAPI (:8000) in dev.
     useEffect(() => {
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
         const url = `${protocol}//${window.location.host}/ws/${encodeURIComponent(clientId)}`;
@@ -98,6 +120,7 @@ export default function App() {
         ws.onerror = () => setError("WebSocket error — is the API running on :8000?");
         ws.onmessage = handleWsMessage;
 
+        // Keeps the socket warm; server just receives text in a loop (no special ping handler required).
         const ping = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send("ping");
@@ -110,6 +133,7 @@ export default function App() {
         };
     }, [clientId, handleWsMessage]);
 
+    /** POST new question; server broadcasts `new_question` to all tabs. */
     const handleAsk = async () => {
         const t = question.trim();
         if (!t) return;
@@ -135,6 +159,7 @@ export default function App() {
         }
     };
 
+    /** POST answer for someone else’s question; removes it from `toAnswer` on success. */
     const submitAnswer = async (qid) => {
         const text = (answerDrafts[qid] || "").trim();
         if (!text) return;
@@ -164,6 +189,7 @@ export default function App() {
         }
     };
 
+    /** Ask-only: calls Gemini on the server, then UI updates from response + optional `summary_ready` WS event. */
     const finalize = async (qid) => {
         setError(null);
         try {
@@ -197,6 +223,7 @@ export default function App() {
 
     return (
         <div className="fraude-root">
+            {/* Top: connection badge reflects WebSocket state (needs API + Vite proxy in dev). */}
             <header className="fraude-topbar">
                 <span>fraude</span>
                 <span className={`fraude-ws fraude-ws-${wsState}`}>
@@ -211,6 +238,7 @@ export default function App() {
             {error ? <div className="fraude-banner">{error}</div> : null}
 
             <div className="fraude-main">
+                {/* Left: compose a new question for everyone online. */}
                 <aside className="fraude-left">
                     <p className="fraude-hint">
                         You are <code className="fraude-code">{clientId.slice(0, 8)}…</code>
@@ -235,6 +263,7 @@ export default function App() {
 
                 <div className="fraude-divider" />
 
+                {/* Right: your threads + incoming questions to answer. */}
                 <section className="fraude-right">
                     <h2 className="fraude-section-title">your threads</h2>
                     {myList.length === 0 ? (

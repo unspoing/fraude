@@ -1,7 +1,12 @@
+/**
+ * Vite config for the React SPA.
+ *
+ * Dev server serves the UI (port 5173 by default). The browser uses the same origin for `/api` and `/ws`;
+ * these proxies forward to FastAPI on 127.0.0.1:8000 so CORS is avoided during local dev.
+ */
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
   server: {

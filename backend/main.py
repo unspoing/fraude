@@ -1,5 +1,17 @@
 """
-Fraude: broadcast questions to online users, collect answers, summarize with Gemini.
+Fraude API (FastAPI)
+
+HTTP:
+  POST /api/questions              — create question; broadcast `new_question` to all WebSockets
+  POST /api/questions/{id}/answers — submit one answer (per client_id); idempotent overwrite per client
+  POST /api/questions/{id}/finalize — asker only: call Gemini, store summary, push `summary_ready` to asker
+
+Realtime:
+  WS /ws/{client_id} — every connected browser tab; used to push new questions and summaries (no Redis; in-memory).
+
+Env:
+  GEMINI_API_KEY — required for finalize (503 if missing)
+  GEMINI_MODEL   — optional, default gemini-2.5-flash
 """
 
 from __future__ import annotations
@@ -23,6 +35,7 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 
 def _gemini_client():
+    """Lazy client so importing the app without GEMINI_API_KEY still works (finalize will fail until set)."""
     from google import genai
 
     key = os.environ.get("GEMINI_API_KEY")
@@ -33,6 +46,8 @@ def _gemini_client():
 
 @dataclass
 class QuestionState:
+    """In-memory question; `summary is not None` means finalized (no more answers)."""
+
     id: str
     text: str
     asker_client_id: str
@@ -69,9 +84,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- In-memory store (single process; restart clears everything) ---
+
 _lock = asyncio.Lock()
 _questions: dict[str, QuestionState] = {}
-# One user may have multiple tabs — each tab has its own WebSocket.
+# client_id -> open WebSockets for that browser identity (one entry per tab).
 _connections: dict[str, list[WebSocket]] = defaultdict(list)
 
 
@@ -88,6 +105,7 @@ def _remove_socket(client_id: str, websocket: WebSocket) -> None:
 
 
 async def _broadcast(event: dict[str, Any]) -> None:
+    """Push one JSON event to every connected WebSocket (e.g. new question)."""
     payload = json.dumps(event)
     for client_id, wss in list(_connections.items()):
         for ws in list(wss):
@@ -98,6 +116,7 @@ async def _broadcast(event: dict[str, Any]) -> None:
 
 
 async def _send_to_client(client_id: str, event: dict[str, Any]) -> None:
+    """Push to all tabs sharing the same client_id (e.g. summary_ready to the asker)."""
     payload = json.dumps(event)
     wss = list(_connections.get(client_id, []))
     for ws in wss:
@@ -169,6 +188,7 @@ async def create_question(body: QuestionCreate):
             asker_client_id=body.client_id,
         )
 
+    # Notify every connected WebSocket (all tabs), including other tabs of the asker.
     await _broadcast(
         {
             "type": "new_question",
@@ -195,6 +215,7 @@ async def submit_answer(question_id: str, body: AnswerCreate):
 
 @app.post("/api/questions/{question_id}/finalize")
 async def finalize_question(question_id: str, body: FinalizeBody):
+    # Snapshot question + answers under lock, then call Gemini outside the lock (I/O).
     async with _lock:
         q = _questions.get(question_id)
         if not q:
@@ -237,6 +258,7 @@ async def finalize_question(question_id: str, body: FinalizeBody):
 
 @app.websocket("/ws/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
+    # Idle loop: client may send "ping" or anything; we only need the socket open for server→client pushes.
     if not client_id or len(client_id) > 128:
         await websocket.close(code=4000)
         return
