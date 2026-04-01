@@ -1,64 +1,96 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./fraude.css";
 
 function getOrCreateClientId() {
     let id = sessionStorage.getItem("fraude_client_id");
-    if (!id) {
-        id = crypto.randomUUID();
-        sessionStorage.setItem("fraude_client_id", id);
-    }
+    if (!id) { id = crypto.randomUUID(); sessionStorage.setItem("fraude_client_id", id); }
     return id;
 }
 
+function SendIcon() {
+    return (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13" />
+            <polygon points="22 2 15 22 11 13 2 9 22 2" />
+        </svg>
+    );
+}
+
+function ThinkingDots() {
+    return (
+        <div className="fraude-thinking">
+            <span /><span /><span />
+        </div>
+    );
+}
+
+// Each message in the chat:
+// { id, role: 'user'|'fraude'|'incoming', text, thinking?, responded?, qid?, draft? }
+
 export default function App() {
     const clientId = useMemo(() => getOrCreateClientId(), []);
+    const shortId   = clientId.slice(0, 8);
+    const initials  = shortId.slice(0, 2).toUpperCase();
 
-    const [question, setQuestion] = useState("");
-    const [wsState, setWsState] = useState("connecting");
-    const [error, setError] = useState(null);
+    const [wsState, setWsState]     = useState("connecting");
+    const [error, setError]         = useState(null);
+    const [question, setQuestion]   = useState("");
+    const [messages, setMessages]   = useState([]);
+    const [threads, setThreads]     = useState([]); // sidebar list
+    const [activeThread, setActiveThread] = useState(null);
 
-    /** @type {Record<string, { text: string, status: 'open'|'summarized', summary?: string }>} */
-    const [myQuestions, setMyQuestions] = useState({});
-    /** @type {Record<string, { text: string, askerId: string }>} */
-    const [toAnswer, setToAnswer] = useState({});
-    const [answerDrafts, setAnswerDrafts] = useState({});
+    const wsRef       = useRef(null);
+    const bottomRef   = useRef(null);
+    const textareaRef = useRef(null);
+
+    // Auto-scroll to bottom
+    useEffect(() => {
+        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, [messages]);
+
+    // Auto-resize textarea
+    const handleInput = (e) => {
+        setQuestion(e.target.value);
+        e.target.style.height = "auto";
+        e.target.style.height = Math.min(e.target.scrollHeight, 200) + "px";
+    };
 
     const handleWsMessage = useCallback((ev) => {
         let data;
-        try {
-            data = JSON.parse(ev.data);
-        } catch {
-            return;
-        }
+        try { data = JSON.parse(ev.data); } catch { return; }
+
         if (data.type === "new_question") {
             if (data.asker_client_id === clientId) {
-                setMyQuestions((prev) => ({
-                    ...prev,
-                    [data.question_id]: { text: data.question_text, status: "open" },
-                }));
+                // Our question was confirmed — mark as thinking
+                setMessages((prev) => prev.map((m) =>
+                    m.pendingQid === data.question_id
+                        ? { ...m, thinking: true, pendingQid: undefined, qid: data.question_id }
+                        : m
+                ));
+                setThreads((t) => [{ qid: data.question_id, text: data.question_text }, ...t]);
             } else {
-                setToAnswer((prev) => ({
+                // Someone else asked — show as incoming card
+                setMessages((prev) => [
                     ...prev,
-                    [data.question_id]: {
+                    {
+                        id: crypto.randomUUID(),
+                        role: "incoming",
+                        qid: data.question_id,
                         text: data.question_text,
-                        askerId: data.asker_client_id,
+                        draft: "",
+                        responded: false,
                     },
-                }));
+                ]);
             }
         }
+
         if (data.type === "summary_ready") {
-            setMyQuestions((prev) => {
-                const cur = prev[data.question_id];
-                if (!cur) return prev;
-                return {
-                    ...prev,
-                    [data.question_id]: {
-                        ...cur,
-                        status: "summarized",
-                        summary: data.summary,
-                    },
-                };
-            });
+            // Replace thinking bubble with the answer
+            setMessages((prev) => prev.map((m) =>
+                m.qid === data.question_id
+                    ? { ...m, thinking: false, answer: data.summary }
+                    : m
+            ));
         }
     }, [clientId]);
 
@@ -66,31 +98,38 @@ export default function App() {
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
         const url = `${protocol}//${window.location.host}/ws/${encodeURIComponent(clientId)}`;
         const ws = new WebSocket(url);
+        wsRef.current = ws;
 
-        ws.onopen = () => {
-            setWsState("open");
-            setError(null);
-        };
-        ws.onclose = () => setWsState("closed");
-        ws.onerror = () => setError("WebSocket error — is the API running on :8000?");
+        ws.onopen    = () => { setWsState("open"); setError(null); };
+        ws.onclose   = () => setWsState("closed");
+        ws.onerror   = () => setError("WebSocket error — is the backend running on :8000?");
         ws.onmessage = handleWsMessage;
 
         const ping = setInterval(() => {
-            if (ws.readyState === WebSocket.OPEN) {
-                ws.send("ping");
-            }
+            if (ws.readyState === WebSocket.OPEN) ws.send("ping");
         }, 25000);
 
-        return () => {
-            clearInterval(ping);
-            ws.close();
-        };
+        return () => { clearInterval(ping); ws.close(); };
     }, [clientId, handleWsMessage]);
 
     const handleAsk = async () => {
         const t = question.trim();
         if (!t) return;
         setError(null);
+
+        // Optimistically add user bubble + a pending fraude bubble
+        const tempQid = "__pending__" + crypto.randomUUID();
+        const userMsgId = crypto.randomUUID();
+        const fraudeMsgId = crypto.randomUUID();
+
+        setMessages((prev) => [
+            ...prev,
+            { id: userMsgId, role: "user", text: t },
+            { id: fraudeMsgId, role: "fraude", thinking: true, pendingQid: tempQid, qid: null, answer: null },
+        ]);
+        setQuestion("");
+        if (textareaRef.current) { textareaRef.current.style.height = "auto"; }
+
         try {
             const res = await fetch("/api/questions", {
                 method: "POST",
@@ -102,46 +141,17 @@ export default function App() {
                 throw new Error(err.detail || res.statusText);
             }
             const data = await res.json();
-            setMyQuestions((prev) => ({
-                ...prev,
-                [data.question_id]: { text: t, status: "open" },
-            }));
-            setQuestion("");
+            // Patch the pending fraude bubble with the real qid
+            setMessages((prev) => prev.map((m) =>
+                m.pendingQid === tempQid ? { ...m, pendingQid: data.question_id, qid: data.question_id } : m
+            ));
         } catch (e) {
             setError(e.message || String(e));
+            setMessages((prev) => prev.filter((m) => m.id !== fraudeMsgId));
         }
     };
 
-    const submitAnswer = async (qid) => {
-        const text = (answerDrafts[qid] || "").trim();
-        if (!text) return;
-        setError(null);
-        try {
-            const res = await fetch(`/api/questions/${qid}/answers`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ client_id: clientId, text }),
-            });
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                throw new Error(err.detail || res.statusText);
-            }
-            setToAnswer((prev) => {
-                const next = { ...prev };
-                delete next[qid];
-                return next;
-            });
-            setAnswerDrafts((prev) => {
-                const next = { ...prev };
-                delete next[qid];
-                return next;
-            });
-        } catch (e) {
-            setError(e.message || String(e));
-        }
-    };
-
-    const finalize = async (qid) => {
+    const handleFinalize = async (qid) => {
         setError(null);
         try {
             const res = await fetch(`/api/questions/${qid}/finalize`, {
@@ -150,127 +160,205 @@ export default function App() {
                 body: JSON.stringify({ client_id: clientId }),
             });
             const body = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                throw new Error(
-                    typeof body.detail === "string"
-                        ? body.detail
-                        : JSON.stringify(body.detail || body)
-                );
-            }
-            setMyQuestions((prev) => ({
-                ...prev,
-                [qid]: {
-                    ...prev[qid],
-                    status: "summarized",
-                    summary: body.summary,
-                },
-            }));
+            if (!res.ok) throw new Error(typeof body.detail === "string" ? body.detail : JSON.stringify(body));
+            setMessages((prev) => prev.map((m) =>
+                m.qid === qid ? { ...m, thinking: false, answer: body.summary } : m
+            ));
         } catch (e) {
             setError(e.message || String(e));
         }
     };
 
-    const myList = Object.entries(myQuestions).sort(([a], [b]) => a.localeCompare(b));
+    const updateDraft = (msgId, val) => {
+        setMessages((prev) => prev.map((m) => m.id === msgId ? { ...m, draft: val } : m));
+    };
+
+    const submitAnswer = async (msg) => {
+        const text = (msg.draft || "").trim();
+        if (!text) return;
+        setError(null);
+        try {
+            const res = await fetch(`/api/questions/${msg.qid}/answers`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ client_id: clientId, text }),
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || res.statusText);
+            }
+            setMessages((prev) => prev.map((m) =>
+                m.id === msg.id ? { ...m, responded: true } : m
+            ));
+        } catch (e) {
+            setError(e.message || String(e));
+        }
+    };
+
+    const handleKeyDown = (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            handleAsk();
+        }
+    };
 
     return (
         <div className="fraude-root">
-            <header className="fraude-topbar">
-                <span>fraude</span>
-                <span className={`fraude-ws fraude-ws-${wsState}`}>
-                    {wsState === "open"
-                        ? "live"
-                        : wsState === "connecting"
-                          ? "connecting…"
-                          : "offline"}
-                </span>
-            </header>
 
-            {error ? <div className="fraude-banner">{error}</div> : null}
+            {/* ── Sidebar ── */}
+            <aside className="fraude-sidebar">
+                <div className="fraude-sidebar-logo">fraude</div>
 
-            <div className="fraude-main">
-                <aside className="fraude-left">
-                    <p className="fraude-hint">
-                        You are <code className="fraude-code">{clientId.slice(0, 8)}…</code>
-                    </p>
-                    <label className="fraude-label">your question</label>
-                    <textarea
-                        className="fraude-textarea"
-                        value={question}
-                        onChange={(e) => setQuestion(e.target.value)}
-                        placeholder="ask something — everyone online gets pinged"
-                        rows={6}
-                    />
-                    <button
-                        type="button"
-                        className="fraude-button"
-                        onClick={handleAsk}
-                        disabled={!question.trim()}
-                    >
-                        ask the crowd
-                    </button>
-                </aside>
-
-                <div className="fraude-divider" />
-
-                <section className="fraude-right">
-                    <h2 className="fraude-section-title">your threads</h2>
-                    {myList.length === 0 ? (
-                        <div className="fraude-card fraude-muted">nothing here yet</div>
-                    ) : (
-                        myList.map(([qid, q]) => (
-                            <div key={qid} className="fraude-card">
-                                <div className="fraude-card-question">q: {q.text}</div>
-                                {q.status === "open" ? (
-                                    <div className="fraude-actions">
-                                        <button
-                                            type="button"
-                                            className="fraude-button fraude-button-secondary"
-                                            onClick={() => finalize(qid)}
-                                        >
-                                            get summary (Gemini)
-                                        </button>
-                                    </div>
-                                ) : (
-                                    <div className="fraude-card-answer">
-                                        <span className="fraude-label">summary</span>
-                                        <p className="fraude-summary">{q.summary}</p>
-                                    </div>
-                                )}
+                {threads.length > 0 && (
+                    <>
+                        <div className="fraude-sidebar-label">recent</div>
+                        {threads.map((t) => (
+                            <div
+                                key={t.qid}
+                                className={`fraude-thread-item ${activeThread === t.qid ? "active" : ""}`}
+                                onClick={() => setActiveThread(t.qid)}
+                            >
+                                <span className="fraude-thread-dot" />
+                                {t.text.length > 32 ? t.text.slice(0, 32) + "…" : t.text}
                             </div>
-                        ))
-                    )}
+                        ))}
+                    </>
+                )}
 
-                    <h2 className="fraude-section-title">answer others</h2>
-                    {Object.keys(toAnswer).length === 0 ? (
-                        <div className="fraude-card fraude-muted">no open questions</div>
-                    ) : (
-                        Object.entries(toAnswer).map(([qid, item]) => (
-                            <div key={qid} className="fraude-card fraude-card-incoming">
-                                <div className="fraude-card-question">q: {item.text}</div>
-                                <textarea
-                                    className="fraude-textarea fraude-textarea-sm"
-                                    placeholder="your raw take"
-                                    value={answerDrafts[qid] || ""}
-                                    onChange={(e) =>
-                                        setAnswerDrafts((d) => ({
-                                            ...d,
-                                            [qid]: e.target.value,
-                                        }))
-                                    }
-                                    rows={4}
-                                />
-                                <button
-                                    type="button"
-                                    className="fraude-button"
-                                    onClick={() => submitAnswer(qid)}
-                                    disabled={!(answerDrafts[qid] || "").trim()}
-                                >
-                                    send answer
-                                </button>
-                            </div>
-                        ))
-                    )}
-                </section>
+                <div className="fraude-sidebar-bottom">
+                    <div className="fraude-session-chip">
+                        <div className="fraude-avatar">{initials}</div>
+                        <div className="fraude-session-info">
+                            <div className="fraude-session-name">you</div>
+                            <div className="fraude-session-id">{shortId}…</div>
+                        </div>
+                        <div className={`fraude-ws-badge ws-${wsState}`} title={wsState} />
+                    </div>
+                </div>
+            </aside>
+
+            {/* ── Chat ── */}
+            <div className="fraude-chat">
+                {error && <div className="fraude-banner">{error}</div>}
+
+                <header className="fraude-chat-header">
+                    ask the crowd
+                </header>
+
+                {/* Messages */}
+                {messages.length === 0 ? (
+                    <div className="fraude-empty">
+                        <div className="fraude-empty-logo">fraude</div>
+                        <div className="fraude-empty-sub">ask something — everyone online gets pinged</div>
+                    </div>
+                ) : (
+                    <div className="fraude-messages">
+                        {messages.map((msg) => {
+
+                            /* User bubble */
+                            if (msg.role === "user") return (
+                                <div key={msg.id} className="fraude-message-row user">
+                                    <div className="fraude-message-inner">
+                                        <div className="fraude-bubble">{msg.text}</div>
+                                    </div>
+                                </div>
+                            );
+
+                            /* Fraude response bubble */
+                            if (msg.role === "fraude") return (
+                                <div key={msg.id} className="fraude-message-row fraude">
+                                    <div className="fraude-message-inner">
+                                        <div className="fraude-msg-avatar">f</div>
+                                        <div className="fraude-msg-body">
+                                            <div className="fraude-msg-sender">fraude</div>
+                                            {msg.thinking && !msg.answer ? (
+                                                <>
+                                                    <ThinkingDots />
+                                                    {msg.qid && (
+                                                        <button
+                                                            className="fraude-inline-btn"
+                                                            style={{ marginTop: 8, alignSelf: "flex-start" }}
+                                                            onClick={() => handleFinalize(msg.qid)}
+                                                        >
+                                                            get gemini's take →
+                                                        </button>
+                                                    )}
+                                                </>
+                                            ) : (
+                                                <div className="fraude-msg-text">{msg.answer}</div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+
+                            /* Incoming question from another user */
+                            if (msg.role === "incoming") return (
+                                <div key={msg.id} className="fraude-message-row fraude">
+                                    <div className="fraude-message-inner">
+                                        <div className="fraude-msg-avatar">?</div>
+                                        <div className="fraude-msg-body">
+                                            <div className="fraude-incoming-card">
+                                                <div className="fraude-incoming-label">someone needs your wisdom</div>
+                                                <div className="fraude-incoming-question">{msg.text}</div>
+                                                {!msg.responded ? (
+                                                    <>
+                                                        <textarea
+                                                            className="fraude-inline-textarea"
+                                                            placeholder="drop your raw take…"
+                                                            value={msg.draft || ""}
+                                                            onChange={(e) => updateDraft(msg.id, e.target.value)}
+                                                        />
+                                                        <button
+                                                            className="fraude-inline-btn"
+                                                            onClick={() => submitAnswer(msg)}
+                                                            disabled={!(msg.draft || "").trim()}
+                                                        >
+                                                            bestow wisdom
+                                                        </button>
+                                                    </>
+                                                ) : (
+                                                    <div style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic" }}>
+                                                        wisdom bestowed ✓
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+
+                            return null;
+                        })}
+                        <div ref={bottomRef} />
+                    </div>
+                )}
+
+                {/* Input bar */}
+                <div className="fraude-input-bar">
+                    <div className="fraude-input-wrap">
+                        <textarea
+                            ref={textareaRef}
+                            className="fraude-input-field"
+                            placeholder="ask the crowd something…"
+                            value={question}
+                            onChange={handleInput}
+                            onKeyDown={handleKeyDown}
+                            rows={1}
+                        />
+                        <div className="fraude-input-actions">
+                            <span className="fraude-input-hint">↵ send · shift+↵ newline</span>
+                            <button
+                                className="fraude-send-btn"
+                                onClick={handleAsk}
+                                disabled={!question.trim()}
+                                title="Send"
+                            >
+                                <SendIcon />
+                            </button>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     );
