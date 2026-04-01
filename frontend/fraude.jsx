@@ -87,19 +87,25 @@ export default function App() {
 
         if (data.type === "new_question") {
             if (data.asker_client_id === clientId) {
-                // Our question was confirmed — mark as thinking
-                setMessages((prev) => prev.map((m) =>
-                    m.pendingQid === data.question_id
+                // Our question was confirmed — mark as thinking (WS may arrive before fetch patches pendingQid)
+                setMessages((prev) => prev.map((m) => {
+                    if (m.role !== "fraude") return m;
+                    const matches =
+                        m.pendingQid === data.question_id ||
+                        (typeof m.pendingQid === "string" &&
+                            m.pendingQid.startsWith("__pending__") &&
+                            !m.qid);
+                    return matches
                         ? { ...m, thinking: true, pendingQid: undefined, qid: data.question_id }
-                        : m
-                ));
+                        : m;
+                }));
                 setThreads((t) => [{ qid: data.question_id, text: data.question_text }, ...t]);
             } else {
                 // Someone else asked — show as incoming card
                 setMessages((prev) => [
                     ...prev,
                     {
-                        id: crypto.randomUUID(),
+                        id: newClientId(),
                         role: "incoming",
                         qid: data.question_id,
                         text: data.question_text,
@@ -144,9 +150,9 @@ export default function App() {
         setError(null);
 
         // Optimistically add user bubble + a pending fraude bubble
-        const tempQid = "__pending__" + crypto.randomUUID();
-        const userMsgId = crypto.randomUUID();
-        const fraudeMsgId = crypto.randomUUID();
+        const tempQid = "__pending__" + newClientId();
+        const userMsgId = newClientId();
+        const fraudeMsgId = newClientId();
 
         setMessages((prev) => [
             ...prev,
