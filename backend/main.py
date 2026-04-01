@@ -71,8 +71,20 @@ app.add_middleware(
 
 _lock = asyncio.Lock()
 _questions: dict[str, QuestionState] = {}
+# client_id -> last display name sent by the client (for summaries + broadcasts).
+_display_names: dict[str, str] = {}
 # One user may have multiple tabs — each tab has its own WebSocket.
 _connections: dict[str, list[WebSocket]] = defaultdict(list)
+
+
+def _register_display_name(client_id: str, raw: str | None) -> None:
+    if raw is None:
+        return
+    s = raw.strip()[:64]
+    if s:
+        _display_names[client_id] = s
+    else:
+        _display_names.pop(client_id, None)
 
 
 def _remove_socket(client_id: str, websocket: WebSocket) -> None:
@@ -113,11 +125,11 @@ def _summarize(question: str, answers: dict[str, str]) -> str:
         raise RuntimeError("GEMINI_API_KEY is not set")
 
     if not answers:
-        lines = "(No answers were submitted.)"
+        lines = "(think harder buh dee)"
     else:
         parts = []
         for i, (cid, text) in enumerate(answers.items(), start=1):
-            label = cid[:8]
+            label = _display_names.get(cid) or cid[:8]
             parts.append(f"Answer {i} (participant {label}):\n{text.strip()}")
         lines = "\n\n".join(parts)
 
@@ -126,7 +138,6 @@ def _summarize(question: str, answers: dict[str, str]) -> str:
         f"Original question:\n{question.strip()}\n\n"
         f"Raw answers from different people:\n\n{lines}\n\n"
         "Summarize these responses into one cohesive (but possibly unhinged) answer."
-        "Replace some english with scuffed chinese pinyin without the tones here and there for fun. (no need to translate)"
         "Speak like a rapper."
         "Respond as if your just AI responding to a user"
     )
@@ -145,15 +156,18 @@ def _summarize(question: str, answers: dict[str, str]) -> str:
 class QuestionCreate(BaseModel):
     client_id: str = Field(min_length=1, max_length=128)
     text: str = Field(min_length=1, max_length=4000)
+    display_name: str | None = Field(default=None, max_length=64)
 
 
 class AnswerCreate(BaseModel):
     client_id: str = Field(min_length=1, max_length=128)
     text: str = Field(min_length=1, max_length=8000)
+    display_name: str | None = Field(default=None, max_length=64)
 
 
 class FinalizeBody(BaseModel):
     client_id: str = Field(min_length=1, max_length=128)
+    display_name: str | None = Field(default=None, max_length=64)
 
 
 @app.get("/api/health")
@@ -163,6 +177,9 @@ async def health():
 
 @app.post("/api/questions")
 async def create_question(body: QuestionCreate):
+    _register_display_name(body.client_id, body.display_name)
+    asker_label = _display_names.get(body.client_id)
+
     async with _lock:
         qid = uuid.uuid4().hex
         _questions[qid] = QuestionState(
@@ -177,6 +194,7 @@ async def create_question(body: QuestionCreate):
             "question_id": qid,
             "question_text": body.text.strip(),
             "asker_client_id": body.client_id,
+            "asker_display_name": asker_label,
         }
     )
     return {"question_id": qid}
@@ -184,6 +202,7 @@ async def create_question(body: QuestionCreate):
 
 @app.post("/api/questions/{question_id}/answers")
 async def submit_answer(question_id: str, body: AnswerCreate):
+    _register_display_name(body.client_id, body.display_name)
     async with _lock:
         q = _questions.get(question_id)
         if not q:
@@ -197,6 +216,7 @@ async def submit_answer(question_id: str, body: AnswerCreate):
 
 @app.post("/api/questions/{question_id}/finalize")
 async def finalize_question(question_id: str, body: FinalizeBody):
+    _register_display_name(body.client_id, body.display_name)
     async with _lock:
         q = _questions.get(question_id)
         if not q:

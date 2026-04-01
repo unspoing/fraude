@@ -33,6 +33,22 @@ function getOrCreateClientId() {
     return id;
 }
 
+const DISPLAY_NAME_KEY = "fraude_display_name";
+
+function getStoredDisplayName() {
+    return sessionStorage.getItem(DISPLAY_NAME_KEY) ?? "";
+}
+
+function displayNameInitials(name) {
+    const t = name.trim();
+    if (!t) return null;
+    const parts = t.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+        return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    }
+    return t.slice(0, 2).toUpperCase();
+}
+
 function SendIcon() {
     return (
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -56,7 +72,9 @@ function ThinkingDots() {
 export default function App() {
     const clientId = useMemo(() => getOrCreateClientId(), []);
     const shortId   = clientId.slice(0, 8);
-    const initials  = shortId.slice(0, 2).toUpperCase();
+    const [displayName, setDisplayName] = useState(() => getStoredDisplayName());
+    const initials =
+        displayNameInitials(displayName) ?? shortId.slice(0, 2).toUpperCase();
 
     const [wsState, setWsState]     = useState("connecting");
     const [error, setError]         = useState(null);
@@ -75,6 +93,29 @@ export default function App() {
     }, [messages]);
 
     // Auto-resize textarea
+    const persistDisplayName = (value) => {
+        const v = value.trim();
+        if (v) sessionStorage.setItem(DISPLAY_NAME_KEY, v);
+        else sessionStorage.removeItem(DISPLAY_NAME_KEY);
+    };
+
+    const handleDisplayNameChange = (e) => setDisplayName(e.target.value);
+    const handleDisplayNameBlur = () => persistDisplayName(displayName);
+    const handleDisplayNameKeyDown = (e) => {
+        if (e.key === "Enter") {
+            e.preventDefault();
+            e.currentTarget.blur();
+        }
+    };
+
+    const apiPayload = useCallback(
+        (extra) => ({
+            ...extra,
+            display_name: displayName.trim() || null,
+        }),
+        [displayName]
+    );
+
     const handleInput = (e) => {
         setQuestion(e.target.value);
         e.target.style.height = "auto";
@@ -109,6 +150,7 @@ export default function App() {
                         role: "incoming",
                         qid: data.question_id,
                         text: data.question_text,
+                        askerName: data.asker_display_name || null,
                         draft: "",
                         responded: false,
                     },
@@ -166,7 +208,7 @@ export default function App() {
             const res = await fetch("/api/questions", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ client_id: clientId, text: t }),
+                body: JSON.stringify(apiPayload({ client_id: clientId, text: t })),
             });
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
@@ -189,7 +231,7 @@ export default function App() {
             const res = await fetch(`/api/questions/${qid}/finalize`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ client_id: clientId }),
+                body: JSON.stringify(apiPayload({ client_id: clientId })),
             });
             const body = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(typeof body.detail === "string" ? body.detail : JSON.stringify(body));
@@ -213,7 +255,7 @@ export default function App() {
             const res = await fetch(`/api/questions/${msg.qid}/answers`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ client_id: clientId, text }),
+                body: JSON.stringify(apiPayload({ client_id: clientId, text })),
             });
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
@@ -261,7 +303,17 @@ export default function App() {
                     <div className="fraude-session-chip">
                         <div className="fraude-avatar">{initials}</div>
                         <div className="fraude-session-info">
-                            <div className="fraude-session-name">you</div>
+                            <input
+                                type="text"
+                                className="fraude-display-name-input"
+                                placeholder="your name"
+                                value={displayName}
+                                onChange={handleDisplayNameChange}
+                                onBlur={handleDisplayNameBlur}
+                                onKeyDown={handleDisplayNameKeyDown}
+                                maxLength={64}
+                                aria-label="Display name"
+                            />
                             <div className="fraude-session-id">{shortId}…</div>
                         </div>
                         <div className={`fraude-ws-badge ws-${wsState}`} title={wsState} />
@@ -331,7 +383,11 @@ export default function App() {
                                         <div className="fraude-msg-avatar">?</div>
                                         <div className="fraude-msg-body">
                                             <div className="fraude-incoming-card">
-                                                <div className="fraude-incoming-label">someone needs your wisdom</div>
+                                                <div className="fraude-incoming-label">
+                                                    {msg.askerName
+                                                        ? `${msg.askerName} needs your wisdom`
+                                                        : "someone needs your wisdom"}
+                                                </div>
                                                 <div className="fraude-incoming-question">{msg.text}</div>
                                                 {!msg.responded ? (
                                                     <>
