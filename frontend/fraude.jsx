@@ -1,10 +1,33 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import "./fraude.css";
 
+/** Works on http:// + LAN IPs; `randomUUID()` throws outside secure contexts (localhost is ok, 172.x is not). */
+function newClientId() {
+    try {
+        if (globalThis.crypto?.randomUUID) {
+            return globalThis.crypto.randomUUID();
+        }
+    } catch {
+        /* non-secure context */
+    }
+    const bytes = new Uint8Array(16);
+    if (globalThis.crypto?.getRandomValues) {
+        globalThis.crypto.getRandomValues(bytes);
+    } else {
+        for (let i = 0; i < 16; i++) {
+            bytes[i] = Math.floor(Math.random() * 256);
+        }
+    }
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const h = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
 function getOrCreateClientId() {
     let id = sessionStorage.getItem("fraude_client_id");
     if (!id) {
-        id = crypto.randomUUID();
+        id = newClientId();
         sessionStorage.setItem("fraude_client_id", id);
     }
     return id;
