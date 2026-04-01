@@ -125,8 +125,10 @@ def _summarize(question: str, answers: dict[str, str]) -> str:
         "You are helping synthesize crowd-sourced replies.\n\n"
         f"Original question:\n{question.strip()}\n\n"
         f"Raw answers from different people:\n\n{lines}\n\n"
-        "Write one clear, concise summary that captures the main ideas and any notable disagreements. "
-        "Do not invent facts that are not implied by the answers."
+        "Summarize these responses into one cohesive (but possibly unhinged) answer."
+        "Replace some english with scuffed chinese pinyin without the tones here and there for fun. (no need to translate)"
+        "Speak like a rapper."
+        "Respond as if your just AI responding to a user"
     )
 
     response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
