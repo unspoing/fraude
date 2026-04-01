@@ -31,5 +31,9 @@ dist-ssr/
 .env.production.local
 .env.local
 
+# Pycache
+*.pyc
+__pycache__/
+
 # TypeScript
 *.tsbuildinfo
