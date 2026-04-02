@@ -176,7 +176,7 @@ export default function App() {
 
         ws.onopen    = () => { setWsState("open"); setError(null); };
         ws.onclose   = () => setWsState("closed");
-        ws.onerror   = () => setError("WebSocket error — is the backend running on :8000?");
+        ws.onerror   = () => setError("big error on the sock lil bro port 8000?");
         ws.onmessage = handleWsMessage;
 
         const ping = setInterval(() => {
@@ -306,7 +306,7 @@ export default function App() {
                             <input
                                 type="text"
                                 className="fraude-display-name-input"
-                                placeholder="your name"
+                                placeholder="enter name"
                                 value={displayName}
                                 onChange={handleDisplayNameChange}
                                 onBlur={handleDisplayNameBlur}
@@ -326,14 +326,14 @@ export default function App() {
                 {error && <div className="fraude-banner">{error}</div>}
 
                 <header className="fraude-chat-header">
-                    ask the crowd
+                    ask a fraud
                 </header>
 
                 {/* Messages */}
                 {messages.length === 0 ? (
                     <div className="fraude-empty">
                         <div className="fraude-empty-logo">fraude</div>
-                        <div className="fraude-empty-sub">ask something — everyone online gets pinged</div>
+                        <div className="fraude-empty-sub">ask fraude</div>
                     </div>
                 ) : (
                     <div className="fraude-messages">
@@ -364,7 +364,7 @@ export default function App() {
                                                             style={{ marginTop: 8, alignSelf: "flex-start" }}
                                                             onClick={() => handleFinalize(msg.qid)}
                                                         >
-                                                            get gemini's take →
+                                                            get fraud now
                                                         </button>
                                                     )}
                                                 </>
@@ -385,15 +385,15 @@ export default function App() {
                                             <div className="fraude-incoming-card">
                                                 <div className="fraude-incoming-label">
                                                     {msg.askerName
-                                                        ? `${msg.askerName} needs your wisdom`
-                                                        : "someone needs your wisdom"}
+                                                        ? `${msg.askerName} is a fraud`
+                                                        : "fraud incoming"}
                                                 </div>
                                                 <div className="fraude-incoming-question">{msg.text}</div>
                                                 {!msg.responded ? (
                                                     <>
                                                         <textarea
                                                             className="fraude-inline-textarea"
-                                                            placeholder="drop your raw take…"
+                                                            placeholder="type here fraud"
                                                             value={msg.draft || ""}
                                                             onChange={(e) => updateDraft(msg.id, e.target.value)}
                                                         />
@@ -402,12 +402,12 @@ export default function App() {
                                                             onClick={() => submitAnswer(msg)}
                                                             disabled={!(msg.draft || "").trim()}
                                                         >
-                                                            bestow wisdom
+                                                            bestow frauds
                                                         </button>
                                                     </>
                                                 ) : (
                                                     <div style={{ fontSize: 13, color: "var(--text-muted)", fontStyle: "italic" }}>
-                                                        wisdom bestowed ✓
+                                                        fraud recieved
                                                     </div>
                                                 )}
                                             </div>
@@ -428,14 +428,14 @@ export default function App() {
                         <textarea
                             ref={textareaRef}
                             className="fraude-input-field"
-                            placeholder="ask the crowd something…"
+                            placeholder="yo twin ask some frauds"
                             value={question}
                             onChange={handleInput}
                             onKeyDown={handleKeyDown}
                             rows={1}
                         />
                         <div className="fraude-input-actions">
-                            <span className="fraude-input-hint">↵ send · shift+↵ newline</span>
+                            <span className="fraude-input-hint">press enter twin</span>
                             <button
                                 className="fraude-send-btn"
                                 onClick={handleAsk}
