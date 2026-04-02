@@ -279,6 +279,12 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--
     margin-top: 2px;
 }
 
+img.fraude-msg-avatar.fraude-msg-avatar--pic {
+    display: block;
+    object-fit: cover;
+    padding: 0;
+}
+
 .fraude-msg-body {
     flex: 1;
     display: flex;

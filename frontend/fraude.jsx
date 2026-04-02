@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import fraudePic from "./assets/fraude.png";
 import "./fraude.css";
 
 /** Works on http:// + LAN IPs; `randomUUID()` throws outside secure contexts (localhost is ok, 172.x is not). */
@@ -352,7 +353,11 @@ export default function App() {
                             if (msg.role === "fraude") return (
                                 <div key={msg.id} className="fraude-message-row fraude">
                                     <div className="fraude-message-inner">
-                                        <div className="fraude-msg-avatar">f</div>
+                                        <img
+                                            className="fraude-msg-avatar fraude-msg-avatar--pic"
+                                            src={fraudePic}
+                                            alt=""
+                                        />
                                         <div className="fraude-msg-body">
                                             <div className="fraude-msg-sender">fraude</div>
                                             {msg.thinking && !msg.answer ? (
